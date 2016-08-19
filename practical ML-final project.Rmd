@@ -1,0 +1,136 @@
+---
+title: "Practical machine learning-final project"
+date: "August 19, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reading data sets
+
+This is a document showing how I run my analysis to find a classification model and apply it to the testing set. 
+First, training and testing sets were downloaded from the links provided in the instructions.
+
+```{r cars}
+rm(list=ls())
+if(!file.exists('pml-training.csv')){
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = 'pml-training.csv')}
+if(!file.exists('pml-testing.csv')){
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = 'pml-testing.csv')}
+training <- read.csv('pml-training.csv', na.strings = c("","NA", "NaN", "#DIV/0!"))
+testing <- read.csv('pml-testing.csv', na.strings = c("","NA", "NaN", "#DIV/0!"))
+```
+
+## *Required libraries*
+
+The libraries I used in this analysis are:
+```{r library, eval=FALSE}
+library(caret)
+library(rattle)
+library(rpart.plot)
+library(rpart)
+library(randomForest)
+library(utils)
+```
+
+## Data cleaning
+Variables with zero variability were identified and deleted from the training set.
+```{r }
+library(caret)
+nzv <- nearZeroVar(training[,-c(1,160)], saveMetrics = T)
+nzv[nzv[,"zeroVar"]>0,] #rows with zero variability
+training <- training[,!names(training) %in% c("kurtosis_yaw_belt","skewness_yaw_belt","amplitude_yaw_belt",
+                         "kurtosis_yaw_dumbbell","skewness_yaw_dumbbell","amplitude_yaw_dumbbell",
+                         "kurtosis_yaw_forearm","skewness_yaw_forearm","amplitude_yaw_forearm")]
+```
+
+The first 7 columns in the training set are not measured variables and therefore, can be omitted.
+```{r}
+training <- training[,-c(1:7)] # deleting the first 7 columns
+```
+
+Those variables including more than 50% NA, were deleted from the training set.
+```{r}
+NaVar <- c() # delete the rows with more than a half NAs
+for (i in 1:dim(training)[2]){
+  if (sum(is.na(training[,i])) >= 0.5*nrow(training)){
+    NaVar[length(NaVar)+1]= names(training)[i]}}
+training <- training[,! names(training) %in% c(NaVar)]
+```
+
+The testing set was cleaned accordingly:
+```{r}
+testing <- cbind(testing[,160],testing[,names(testing) %in% names(training)]) #cleaning the testing data set
+names(testing)[1] <- 'problem_id'
+```
+
+For proper functioning of machine learning algorithms, same variables in the training and testing sets should be of the same class.
+```{r}
+for (i in 1:dim(training)[2]){
+  for (j in 1:dim(testing)[2]){
+    if (names(training)[i]== names(testing)[j]){
+      if (class(training[,i]) != class(testing[,j])){print(names(testing)[j])}}}} #find the variables with incompatible classes in training and testing sets
+# there are 3 variables: "magnet_dumbbell_z", "magnet_forearm_y","magnet_forearm_z"
+```
+```{r, results="hide"}
+class(training[,"magnet_dumbbell_z"]) # it has a numeric class
+testing[,"magnet_dumbbell_z"] <- as.numeric(testing[,"magnet_dumbbell_z"]) 
+class(training[,"magnet_forearm_y"]) # it has a numeric class
+testing[,"magnet_forearm_y"] <- as.numeric(testing[,"magnet_forearm_y"])
+class(training[,"magnet_forearm_z"]) # it has a numeric class
+testing[,"magnet_forearm_z"] <- as.numeric(testing[,"magnet_forearm_z"])
+```
+
+Variables in the cleaned training set are:
+```{r}
+names(training)
+```
+
+# Model fitting
+First, the training data set was partitioned into myTraining and myTesting data sets for estimating the out of sample error of each trained model.
+```{r}
+set.seed(2016)
+inTrain <- createDataPartition(training$classe, p=0.6, list = FALSE)
+myTraining <- training[inTrain,]; myTesting <- training[-inTrain,]
+```
+
+## Model 1: Decision Trees
+The firs model fitted using the decision trees method. Data was preprocessed (centered and scaled) before model fitting. Training model was resampled using cross validation technique.
+```{r}
+set.seed(2016)
+modFit1 <- train(classe ~. , method='rpart',preProcess=c('center','scale'),trControl=trainControl(method = "cv", number = 8) ,data=myTraining)
+modFit1$finalModel
+```
+Final model decision tree:
+```{r, echo=FALSE}
+library(rattle)
+library(rpart.plot)
+fancyRpartPlot(modFit1$finalModel, main = "Final Model Decision Tree")
+```
+
+
+Model was tested using myTesting data set. A very low (0.49) accuracy was observed.
+```{r, echo=FALSE}
+pred1 <- predict(modFit1, newdata= myTesting)
+confusionMatrix(pred1, myTesting$classe)
+```
+
+## Model 2: Random forest
+The second model fitted using the random forest method. Data was preprocessed (centered and scaled) and cross validated. The final model applied on myTestsing data set and a very high accuracy (0.99) was observed.
+```{r}
+library(randomForest)
+set.seed(2016)
+modFit2 <- randomForest(classe ~., data= myTraining, preProcess=c('center','scale'), trControl=trainControl(method='cv',number = 4))
+pred2 <- predict(modFit2,newdata = myTesting, type='class')
+confusionMatrix(pred2, myTesting$classe)
+```
+
+# Apply random forest model to the training set
+The random forest model provided a better accuracy and therefore, was selected to predict the "classe" of activities in the testing data set. The out of sample error is estimated to be: 1-0.99 = 0.01 of the 20 test cases.
+```{r}
+pred2Test <- predict(modFit2,newdata = testing)
+predictions <- data.frame("problem_id" = testing$problem_id, "classe" = pred2Test)
+predictions
+```
